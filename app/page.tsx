@@ -1,11 +1,12 @@
+"use client";
+
 import { useState } from "react";
 
 const API_KEY = "YOUR_PUBG_API_KEY";
 
-export default function App() {
+export default function Page() {
   const [nickname, setNickname] = useState("");
   const [loading, setLoading] = useState(false);
-  const [player, setPlayer] = useState<any>(null);
   const [seasonStats, setSeasonStats] = useState<any>(null);
 
   const [allMatchIds, setAllMatchIds] = useState<any[]>([]);
@@ -25,18 +26,16 @@ export default function App() {
       setMatches([]);
       setPage(1);
 
-      // 1️⃣ 플레이어 조회
+      // 플레이어 조회
       const playerRes = await fetch(
         `https://api.pubg.com/shards/steam/players?filter[playerNames]=${nickname}`,
         { headers }
       );
       const playerData = await playerRes.json();
       const playerInfo = playerData.data[0];
-      setPlayer(playerInfo);
-
       const accountId = playerInfo.id;
 
-      // 2️⃣ 시즌 조회
+      // 시즌 조회
       const seasonRes = await fetch(
         `https://api.pubg.com/shards/steam/seasons`,
         { headers }
@@ -44,7 +43,7 @@ export default function App() {
       const seasonData = await seasonRes.json();
       const currentSeason = seasonData.data.find((s: any) => s.attributes.isCurrentSeason);
 
-      // 3️⃣ 시즌 스탯
+      // 시즌 스탯
       const statRes = await fetch(
         `https://api.pubg.com/shards/steam/seasons/${currentSeason.id}/players/${accountId}`,
         { headers }
@@ -52,7 +51,7 @@ export default function App() {
       const statData = await statRes.json();
       setSeasonStats(statData.data.attributes.gameModeStats.squad);
 
-      // 4️⃣ 매치 ID 전체 저장
+      // 매치 ID 저장
       const matchIds = playerInfo.relationships.matches.data;
       setAllMatchIds(matchIds);
 
@@ -91,48 +90,14 @@ export default function App() {
 
           const stats = participant?.attributes.stats;
 
-          // 텔레메트리에서 무기 + 헤드샷
-          const telemetryUrl = data.included.find(
-            (i: any) => i.type === "asset"
-          )?.attributes.URL;
-
-          let weaponMap: any = {};
-          let headshots = 0;
-
-          if (telemetryUrl) {
-            const teleRes = await fetch(telemetryUrl);
-            const teleData = await teleRes.json();
-
-            teleData.forEach((event: any) => {
-              if (
-                event._T === "LogPlayerKillV2" &&
-                event.killer?.accountId === accountId
-              ) {
-                const weapon = event.damageCauserName;
-                weaponMap[weapon] = (weaponMap[weapon] || 0) + 1;
-
-                if (event.damageReason === "HeadShot") {
-                  headshots++;
-                }
-              }
-            });
-          }
-
-          const kills = stats?.kills || 0;
-
           return {
             id: m.id,
             map: data.data.attributes.mapName,
             date: new Date(data.data.attributes.createdAt).toLocaleDateString(),
             place: stats?.winPlace || "-",
-            kills,
+            kills: stats?.kills || 0,
             assists: stats?.assists || 0,
             damage: stats?.damageDealt?.toFixed(0) || 0,
-            headshotRate:
-              kills > 0 ? ((headshots / kills) * 100).toFixed(1) + "%" : "0%",
-            weapons: Object.entries(weaponMap)
-              .map(([name, count]) => `${name}(${count})`)
-              .join(", "),
           };
         } catch {
           return {
@@ -143,8 +108,6 @@ export default function App() {
             kills: 0,
             assists: 0,
             damage: 0,
-            headshotRate: "0%",
-            weapons: "-",
           };
         }
       })
@@ -156,11 +119,11 @@ export default function App() {
   const handleLoadMore = async () => {
     const nextPage = page + 1;
     setPage(nextPage);
-    await loadMatches(allMatchIds, player.id, nextPage);
+    await loadMatches(allMatchIds, allMatchIds[0]?.id, nextPage);
   };
 
   return (
-    <div style={{ padding: 40, background: "#0f0f0f", color: "white" }}>
+    <div style={{ padding: 40, background: "#0f0f0f", color: "white", minHeight: "100vh" }}>
       <h1>PUBG 전적 검색</h1>
 
       <input
@@ -178,9 +141,9 @@ export default function App() {
       {seasonStats && (
         <div style={{ marginTop: 30 }}>
           <h2>시즌 스탯 (Squad)</h2>
-          <p>KD: {seasonStats.kills / seasonStats.losses || 0}</p>
+          <p>Kills: {seasonStats.kills}</p>
           <p>평균 데미지: {seasonStats.damageDealt?.toFixed(0)}</p>
-          <p>승률: {((seasonStats.wins / seasonStats.roundsPlayed) * 100).toFixed(1)}%</p>
+          <p>승리: {seasonStats.wins}</p>
         </div>
       )}
 
@@ -201,10 +164,9 @@ export default function App() {
               <p>맵: {m.map}</p>
               <p>날짜: {m.date}</p>
               <p>순위: #{m.place}</p>
-              <p>킬: {m.kills} (헤드샷비율 {m.headshotRate})</p>
+              <p>킬: {m.kills}</p>
               <p>어시스트: {m.assists}</p>
               <p>데미지: {m.damage}</p>
-              <p>사용무기: {m.weapons}</p>
             </div>
           ))}
 
