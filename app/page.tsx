@@ -4,6 +4,7 @@ import { useState } from "react";
 export default function Home() {
   const [nickname, setNickname] = useState("");
   const [stats, setStats] = useState<any>(null);
+  const [recentMatches, setRecentMatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -12,50 +13,46 @@ export default function Home() {
     setLoading(true);
     setError("");
     setStats(null);
+    setRecentMatches([]);
 
     try {
       const apiKey = process.env.NEXT_PUBLIC_PUBG_API_KEY;
       const headers = { Authorization: `Bearer ${apiKey}`, Accept: "application/vnd.api+json" };
 
-      // 1. 플레이어 및 최근 매치 ID 조회
+      // 1. 플레이어 및 최근 20경기 매치 ID 조회
       const playerRes = await fetch(`https://api.pubg.com/shards/steam/players?filter[playerNames]=${nickname}`, { headers });
       if (!playerRes.ok) throw new Error("유저를 찾을 수 없습니다.");
       const playerData = await playerRes.json();
       const accountId = playerData.data[0].id;
-      const matchIds = playerData.data[0].relationships.matches.data.slice(0, 20).map((m: any) => m.id);
+      const matchIds = playerData.data[0].relationships.matches.data.slice(0, 20); // 최근 20개
 
-      // 2. 시즌 종합 데이터 조회 (기본 스탯용)
+      // 2. 최신 시즌 정보 조회
       const seasonsRes = await fetch(`https://api.pubg.com/shards/steam/seasons`, { headers });
       const seasonsData = await seasonsRes.json();
       const currentSeasonId = seasonsData.data.find((s: any) => s.attributes.isCurrentSeason).id;
+
+      // 3. 시즌 종합 전적 (헤드샷 포함)
       const statsRes = await fetch(`https://api.pubg.com/shards/steam/players/${accountId}/seasons/${currentSeasonId}`, { headers });
       const statsData = await statsRes.json();
-      
-      // 3. 최근 매치 상세 분석 (맵, 무기 데이터 추출)
-      // *주의: 실제 서비스 시에는 속도를 위해 백엔드 처리가 권장되지만, 여기서는 로직만 구현합니다.
-      const matchStats = {
-        maps: { Erangel: 0, Miramar: 0, Taego: 0, Vikendi: 0, Deston: 0, Rondo: 0 },
-        weapons: {} as any,
-        recentKills: [] as number[]
-      };
+      const s = statsData.data.attributes.gameModeStats["squad-fpp"] || statsData.data.attributes.gameModeStats["squad"];
 
-      // 매치 분석 시뮬레이션 및 데이터 구조화
-      const modeStats = statsData.data.attributes.gameModeStats["squad-fpp"] || statsData.data.attributes.gameModeStats["squad"];
+      if (!s || s.roundsPlayed === 0) throw new Error("이번 시즌 기록이 없습니다.");
 
       setStats({
-        kd: (modeStats.kills / (modeStats.losses || 1)).toFixed(2),
-        wins: modeStats.wins,
-        damage: Math.floor(modeStats.damageDealt / (modeStats.roundsPlayed || 1)),
-        matches: modeStats.roundsPlayed,
-        // 가상 분석 데이터 (실제 매치 루프는 API 제한상 샘플로 구성)
-        mapWinRate: [
-          { name: "Erangel", win: "15%" }, { name: "Miramar", win: "12%" }, { name: "Taego", win: "20%" }
-        ],
-        recentTrend: [2, 5, 0, 3, 1, 4, 2, 0, 6, 1], // 최근 경기 킬 수 추이
-        topWeapons: [
-          { name: "Beryl M762", kills: "45%" }, { name: "M416", kills: "30%" }, { name: "Kar98k", kills: "15%" }
-        ]
+        kd: (s.kills / (s.losses || 1)).toFixed(2),
+        wins: s.wins,
+        damage: Math.floor(s.damageDealt / s.roundsPlayed),
+        headshot: ((s.headshotKills / (s.kills || 1)) * 100).toFixed(1) + "%", // 헤드샷 비율
+        matches: s.roundsPlayed,
+        top10: ((s.top10s / s.roundsPlayed) * 100).toFixed(1) + "%"
       });
+
+      // 4. 최근 매치 목록 셋팅 (간이 리스트)
+      setRecentMatches(matchIds.map((m: any, index: number) => ({
+        id: m.id,
+        title: `MATCH #${index + 1}`,
+        date: new Date().toLocaleDateString() // 실제 날짜는 매치 상세조회 필요
+      })));
 
     } catch (err: any) {
       setError(err.message);
@@ -66,7 +63,6 @@ export default function Home() {
 
   return (
     <div style={styles.container}>
-      <div style={styles.overlay}></div>
       <div style={styles.content}>
         <h1 style={styles.title}>PHOENIX<span style={styles.red}>STATS</span></h1>
         
@@ -75,45 +71,29 @@ export default function Home() {
           <button onClick={handleSearch} style={styles.button}>{loading ? "..." : "SEARCH"}</button>
         </div>
 
+        {error && <p style={styles.error}>{error}</p>}
+
         {stats && (
           <div style={styles.dashboard}>
-            {/* 기본 스탯 */}
-            <div style={styles.section}>
-              <h2 style={styles.sectionTitle}>SEASON OVERALL</h2>
-              <div style={styles.grid}>
-                <div style={styles.card}><span>K/D</span><strong>{stats.kd}</strong></div>
-                <div style={styles.card}><span>AVG DMG</span><strong>{stats.damage}</strong></div>
-                <div style={styles.card}><span>WINS</span><strong>{stats.wins}</strong></div>
-              </div>
+            {/* 상단 요약 카드 (헤드샷 추가) */}
+            <div style={styles.grid}>
+              <div style={styles.card}><span>K/D</span><strong>{stats.kd}</strong></div>
+              <div style={styles.card}><span>HEADSHOT</span><strong style={{color: '#ff4d4d'}}>{stats.headshot}</strong></div>
+              <div style={styles.card}><span>WIN RATE</span><strong>{stats.top10}</strong></div>
+              <div style={styles.card}><span>AVG DMG</span><strong>{stats.damage}</strong></div>
+              <div style={styles.card}><span>WINS</span><strong>{stats.wins}</strong></div>
+              <div style={styles.card}><span>MATCHES</span><strong>{stats.matches}</strong></div>
             </div>
 
-            {/* 최근 20경기 킬 추이 그래프 스타일 */}
+            {/* 최근 20경기 기록 섹션 */}
             <div style={styles.section}>
-              <h2 style={styles.sectionTitle}>RECENT 10 MATCHES KILLS</h2>
-              <div style={styles.trendBar}>
-                {stats.recentTrend.map((k: number, i: number) => (
-                  <div key={i} style={{...styles.bar, height: `${k * 15}px`}} title={`${k} Kills`}></div>
-                ))}
-              </div>
-            </div>
-
-            <div style={styles.bottomRow}>
-              {/* 맵별 승률 */}
-              <div style={styles.halfSection}>
-                <h2 style={styles.sectionTitle}>MAP WIN RATE</h2>
-                {stats.mapWinRate.map((m: any) => (
-                  <div key={m.name} style={styles.listItem}>
-                    <span>{m.name}</span><strong>{m.win}</strong>
-                  </div>
-                ))}
-              </div>
-
-              {/* 무기 통계 */}
-              <div style={styles.halfSection}>
-                <h2 style={styles.sectionTitle}>TOP WEAPONS</h2>
-                {stats.topWeapons.map((w: any) => (
-                  <div key={w.name} style={styles.listItem}>
-                    <span>{w.name}</span><strong style={{color: '#ff4d4d'}}>{w.kills}</strong>
+              <h2 style={styles.sectionTitle}>RECENT 20 MATCHES</h2>
+              <div style={styles.matchList}>
+                {recentMatches.map((m) => (
+                  <div key={m.id} style={styles.matchItem}>
+                    <span>{m.title}</span>
+                    <span style={styles.matchId}>{m.id}</span>
+                    <button style={styles.viewBtn}>VIEW DETAILS</button>
                   </div>
                 ))}
               </div>
@@ -126,22 +106,21 @@ export default function Home() {
 }
 
 const styles: any = {
-  container: { minHeight: "100vh", display: "flex", justifyContent: "center", padding: "40px 0", background: "#050505", color: "#fff", fontFamily: "sans-serif", position: "relative" },
-  overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: "radial-gradient(circle, rgba(255,0,0,0.05) 0%, rgba(0,0,0,1) 80%)", zIndex: 0 },
-  content: { position: "relative", zIndex: 1, width: "90%", maxWidth: "900px" },
-  title: { fontSize: "3rem", fontWeight: "900", textAlign: "center", marginBottom: "30px", letterSpacing: "3px" },
+  container: { minHeight: "100vh", background: "#0a0a0a", color: "#fff", fontFamily: "sans-serif", padding: "60px 20px" },
+  content: { maxWidth: "900px", margin: "0 auto" },
+  title: { fontSize: "3.5rem", fontWeight: "900", textAlign: "center", marginBottom: "40px", letterSpacing: "5px" },
   red: { color: "#ff4d4d" },
-  searchBox: { display: "flex", gap: "10px", marginBottom: "40px", background: "#111", padding: "10px", borderRadius: "10px" },
-  input: { flex: 1, background: "none", border: "none", color: "#fff", outline: "none", padding: "10px", fontSize: "1.1rem" },
-  button: { background: "#ff4d4d", border: "none", color: "#fff", padding: "10px 30px", borderRadius: "5px", fontWeight: "bold", cursor: "pointer" },
+  searchBox: { display: "flex", gap: "10px", background: "#151515", padding: "10px", borderRadius: "12px", marginBottom: "50px" },
+  input: { flex: 1, background: "none", border: "none", color: "#fff", padding: "10px", fontSize: "1.1rem", outline: "none" },
+  button: { background: "#ff4d4d", border: "none", color: "#fff", padding: "0 40px", borderRadius: "8px", fontWeight: "bold", cursor: "pointer" },
+  error: { color: "#ff4d4d", textAlign: "center", marginBottom: "20px", fontWeight: "bold" },
   dashboard: { display: "flex", flexDirection: "column", gap: "30px" },
-  section: { background: "#111", padding: "20px", borderRadius: "10px", border: "1px solid #222" },
-  sectionTitle: { fontSize: "0.9rem", color: "#555", marginBottom: "20px", letterSpacing: "2px", fontWeight: "bold" },
   grid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "15px" },
-  card: { textAlign: "center", padding: "15px", background: "#0a0a0a", borderRadius: "8px", border: "1px solid #1a1a1a" },
-  trendBar: { display: "flex", alignItems: "flex-end", gap: "8px", height: "100px", justifyContent: "center" },
-  bar: { width: "25px", background: "linear-gradient(to top, #ff4d4d, #800000)", borderRadius: "3px 3px 0 0" },
-  bottomRow: { display: "flex", gap: "20px" },
-  halfSection: { flex: 1, background: "#111", padding: "20px", borderRadius: "10px", border: "1px solid #222" },
-  listItem: { display: "flex", justifyContent: "space-between", padding: "12px 0", borderBottom: "1px solid #1a1a1a" }
+  card: { background: "#151515", padding: "25px", borderRadius: "12px", textAlign: "center", border: "1px solid #222" },
+  section: { background: "#151515", padding: "25px", borderRadius: "12px", border: "1px solid #222" },
+  sectionTitle: { fontSize: "1rem", color: "#666", marginBottom: "20px", letterSpacing: "2px" },
+  matchList: { display: "flex", flexDirection: "column", gap: "10px" },
+  matchItem: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "15px", background: "#050505", borderRadius: "8px", border: "1px solid #1a1a1a" },
+  matchId: { fontSize: "0.7rem", color: "#444" },
+  viewBtn: { background: "#222", border: "none", color: "#888", padding: "5px 15px", borderRadius: "4px", fontSize: "0.8rem", cursor: "pointer" }
 };
