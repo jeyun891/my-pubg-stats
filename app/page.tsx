@@ -1,280 +1,230 @@
-"use client";
 import { useState } from "react";
 
-interface PlayerStats {
-  kd: string;
-  headshot: string;
-  damage: number;
-  matches: number;
-  winRate: string;
-  avgKills: string;
-  avgSurvival: string;
-}
+const API_KEY = "YOUR_PUBG_API_KEY";
 
-interface MatchItem {
-  id: string;
-  map: string;
-  kills: number;
-  headshots: number;
-  headshotRate: string;
-  assists: number;
-  revives: number;
-  damage: number;
-  longestKill: number;
-  distance: number;
-  place: number | string;
-  weapons: string[];
-  date: string;
-}
-
-const MAP_NAMES: Record<string, string> = {
-  Baltic_Main: "Erangel",
-  Desert_Main: "Miramar",
-  Savage_Main: "Sanhok",
-  DihorOtok_Main: "Vikendi",
-  Tiger_Main: "Taego",
-};
-
-export default function Home() {
+export default function App() {
   const [nickname, setNickname] = useState("");
-  const [stats, setStats] = useState<PlayerStats | null>(null);
-  const [recentMatches, setRecentMatches] = useState<MatchItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [player, setPlayer] = useState<any>(null);
+  const [seasonStats, setSeasonStats] = useState<any>(null);
+
+  const [allMatchIds, setAllMatchIds] = useState<any[]>([]);
+  const [matches, setMatches] = useState<any[]>([]);
+  const [page, setPage] = useState(1);
+
+  const MATCH_PER_PAGE = 5;
 
   const headers = {
-    Authorization: `Bearer ${process.env.NEXT_PUBLIC_PUBG_API_KEY}`,
+    Authorization: `Bearer ${API_KEY}`,
     Accept: "application/vnd.api+json",
   };
 
   const handleSearch = async () => {
-    if (!nickname.trim()) return alert("닉네임을 입력하세요!");
-
-    setLoading(true);
-    setError("");
-    setStats(null);
-    setRecentMatches([]);
-
     try {
-      // 1. 플레이어 조회
+      setLoading(true);
+      setMatches([]);
+      setPage(1);
+
+      // 1️⃣ 플레이어 조회
       const playerRes = await fetch(
         `https://api.pubg.com/shards/steam/players?filter[playerNames]=${nickname}`,
         { headers }
       );
-      if (!playerRes.ok) throw new Error("유저를 찾을 수 없습니다.");
-
       const playerData = await playerRes.json();
-      const accountId = playerData.data[0].id;
-      const matchData = playerData.data[0].relationships.matches.data.slice(0, 5);
+      const playerInfo = playerData.data[0];
+      setPlayer(playerInfo);
 
-      // 2. 현재 시즌
-      const seasonsRes = await fetch(
+      const accountId = playerInfo.id;
+
+      // 2️⃣ 시즌 조회
+      const seasonRes = await fetch(
         `https://api.pubg.com/shards/steam/seasons`,
         { headers }
       );
-      const seasonsData = await seasonsRes.json();
-      const currentSeasonId = seasonsData.data.find(
-        (s: any) => s.attributes.isCurrentSeason
-      ).id;
+      const seasonData = await seasonRes.json();
+      const currentSeason = seasonData.data.find((s: any) => s.attributes.isCurrentSeason);
 
-      // 3. 시즌 통계
-      const statsRes = await fetch(
-        `https://api.pubg.com/shards/steam/players/${accountId}/seasons/${currentSeasonId}`,
+      // 3️⃣ 시즌 스탯
+      const statRes = await fetch(
+        `https://api.pubg.com/shards/steam/seasons/${currentSeason.id}/players/${accountId}`,
         { headers }
       );
-      const statsData = await statsRes.json();
-      const allModes = statsData.data.attributes.gameModeStats;
+      const statData = await statRes.json();
+      setSeasonStats(statData.data.attributes.gameModeStats.squad);
 
-      let tKills = 0,
-        tWins = 0,
-        tDamage = 0,
-        tMatches = 0,
-        tDeaths = 0,
-        tHeadshots = 0,
-        tSurvival = 0;
+      // 4️⃣ 매치 ID 전체 저장
+      const matchIds = playerInfo.relationships.matches.data;
+      setAllMatchIds(matchIds);
 
-      Object.values(allModes).forEach((m: any) => {
-        tKills += m.kills;
-        tWins += m.wins;
-        tDamage += m.damageDealt;
-        tMatches += m.roundsPlayed;
-        tDeaths += m.losses;
-        tHeadshots += m.headshotKills;
-        tSurvival += m.timeSurvived;
-      });
+      await loadMatches(matchIds, accountId, 1);
 
-      if (tMatches > 0) {
-        setStats({
-          kd: (tKills / (tDeaths || 1)).toFixed(2),
-          headshot: ((tHeadshots / (tKills || 1)) * 100).toFixed(1) + "%",
-          damage: Math.floor(tDamage / tMatches),
-          matches: tMatches,
-          winRate: ((tWins / tMatches) * 100).toFixed(1) + "%",
-          avgKills: (tKills / tMatches).toFixed(2),
-          avgSurvival: Math.floor(tSurvival / tMatches / 60) + "m",
-        });
-      }
-
-      // 4. 매치 상세 + 무기
-      const matchResults = await Promise.all(
-        matchData.map(async (m: any) => {
-          try {
-            const res = await fetch(
-              `https://api.pubg.com/shards/steam/matches/${m.id}`,
-              { headers }
-            );
-            const data = await res.json();
-
-            const participant = data.included?.find(
-              (i: any) =>
-                i.type === "participant" &&
-                i.attributes.stats.playerId === accountId
-            );
-
-            const stats = participant?.attributes.stats;
-
-            // Telemetry URL
-            const asset = data.included.find((i: any) => i.type === "asset");
-            const telemetryUrl = asset?.attributes?.URL;
-
-            let weapons: string[] = [];
-
-            if (telemetryUrl) {
-              const telemetryRes = await fetch(telemetryUrl);
-              const telemetryData = await telemetryRes.json();
-
-              const kills = telemetryData.filter(
-                (e: any) =>
-                  e._T === "LogPlayerKill" &&
-                  e.killer?.accountId === accountId
-              );
-
-              weapons = kills.map((k: any) => k.damageCauserName);
-            }
-
-            const totalDistance =
-              (stats?.walkDistance || 0) +
-              (stats?.rideDistance || 0) +
-              (stats?.swimDistance || 0);
-
-            return {
-              id: m.id,
-              map:
-                MAP_NAMES[data.data.attributes.mapName] ||
-                data.data.attributes.mapName,
-              kills: stats?.kills || 0,
-              headshots: stats?.headshotKills || 0,
-              headshotRate:
-                stats?.kills > 0
-                  ? ((stats.headshotKills / stats.kills) * 100).toFixed(1) + "%"
-                  : "0%",
-              assists: stats?.assists || 0,
-              revives: stats?.revives || 0,
-              damage: Math.floor(stats?.damageDealt || 0),
-              longestKill: Math.floor(stats?.longestKill || 0),
-              distance: Math.floor(totalDistance / 1000),
-              place: stats?.winPlace || "-",
-              weapons: [...new Set(weapons)],
-              date: new Date(
-                data.data.attributes.createdAt
-              ).toLocaleDateString(),
-            };
-          } catch {
-            return null;
-          }
-        })
-      );
-
-      setRecentMatches(matchResults.filter(Boolean) as MatchItem[]);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (e) {
+      alert("플레이어를 찾을 수 없습니다.");
     } finally {
       setLoading(false);
     }
   };
 
+  const loadMatches = async (
+    matchIdList: any[],
+    accountId: string,
+    pageNumber: number
+  ) => {
+    const start = (pageNumber - 1) * MATCH_PER_PAGE;
+    const end = pageNumber * MATCH_PER_PAGE;
+    const target = matchIdList.slice(start, end);
+
+    const results = await Promise.all(
+      target.map(async (m: any) => {
+        try {
+          const res = await fetch(
+            `https://api.pubg.com/shards/steam/matches/${m.id}`,
+            { headers }
+          );
+          const data = await res.json();
+
+          const participant = data.included.find(
+            (i: any) =>
+              i.type === "participant" &&
+              i.attributes.stats.playerId === accountId
+          );
+
+          const stats = participant?.attributes.stats;
+
+          // 텔레메트리에서 무기 + 헤드샷
+          const telemetryUrl = data.included.find(
+            (i: any) => i.type === "asset"
+          )?.attributes.URL;
+
+          let weaponMap: any = {};
+          let headshots = 0;
+
+          if (telemetryUrl) {
+            const teleRes = await fetch(telemetryUrl);
+            const teleData = await teleRes.json();
+
+            teleData.forEach((event: any) => {
+              if (
+                event._T === "LogPlayerKillV2" &&
+                event.killer?.accountId === accountId
+              ) {
+                const weapon = event.damageCauserName;
+                weaponMap[weapon] = (weaponMap[weapon] || 0) + 1;
+
+                if (event.damageReason === "HeadShot") {
+                  headshots++;
+                }
+              }
+            });
+          }
+
+          const kills = stats?.kills || 0;
+
+          return {
+            id: m.id,
+            map: data.data.attributes.mapName,
+            date: new Date(data.data.attributes.createdAt).toLocaleDateString(),
+            place: stats?.winPlace || "-",
+            kills,
+            assists: stats?.assists || 0,
+            damage: stats?.damageDealt?.toFixed(0) || 0,
+            headshotRate:
+              kills > 0 ? ((headshots / kills) * 100).toFixed(1) + "%" : "0%",
+            weapons: Object.entries(weaponMap)
+              .map(([name, count]) => `${name}(${count})`)
+              .join(", "),
+          };
+        } catch {
+          return {
+            id: m.id,
+            map: "Unknown",
+            date: "-",
+            place: "-",
+            kills: 0,
+            assists: 0,
+            damage: 0,
+            headshotRate: "0%",
+            weapons: "-",
+          };
+        }
+      })
+    );
+
+    setMatches((prev) => [...prev, ...results]);
+  };
+
+  const handleLoadMore = async () => {
+    const nextPage = page + 1;
+    setPage(nextPage);
+    await loadMatches(allMatchIds, player.id, nextPage);
+  };
+
   return (
-    <div style={styles.container}>
-      <div style={styles.content}>
-        <h1 style={styles.title}>
-          PHOENIX<span style={styles.red}>STATS</span>
-        </h1>
+    <div style={{ padding: 40, background: "#0f0f0f", color: "white" }}>
+      <h1>PUBG 전적 검색</h1>
 
-        <div style={styles.searchBox}>
-          <input
-            type="text"
-            placeholder="STEAM NICKNAME..."
-            value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
-            style={styles.input}
-          />
-          <button onClick={handleSearch} style={styles.button}>
-            {loading ? "..." : "SEARCH"}
-          </button>
+      <input
+        value={nickname}
+        onChange={(e) => setNickname(e.target.value)}
+        placeholder="닉네임 입력"
+        style={{ padding: 10, width: 250 }}
+      />
+      <button onClick={handleSearch} style={{ padding: 10, marginLeft: 10 }}>
+        검색
+      </button>
+
+      {loading && <p>로딩중...</p>}
+
+      {seasonStats && (
+        <div style={{ marginTop: 30 }}>
+          <h2>시즌 스탯 (Squad)</h2>
+          <p>KD: {seasonStats.kills / seasonStats.losses || 0}</p>
+          <p>평균 데미지: {seasonStats.damageDealt?.toFixed(0)}</p>
+          <p>승률: {((seasonStats.wins / seasonStats.roundsPlayed) * 100).toFixed(1)}%</p>
         </div>
+      )}
 
-        {error && <p style={styles.error}>{error}</p>}
+      {matches.length > 0 && (
+        <div style={{ marginTop: 30 }}>
+          <h2>최근 매치</h2>
 
-        {stats && (
-          <div style={styles.dashboard}>
-            <div style={styles.grid}>
-              <div style={styles.card}><span>K/D</span><strong>{stats.kd}</strong></div>
-              <div style={styles.card}><span>WIN RATE</span><strong>{stats.winRate}</strong></div>
-              <div style={styles.card}><span>AVG KILLS</span><strong>{stats.avgKills}</strong></div>
-              <div style={styles.card}><span>HEADSHOT</span><strong>{stats.headshot}</strong></div>
-              <div style={styles.card}><span>AVG DMG</span><strong>{stats.damage}</strong></div>
-              <div style={styles.card}><span>SURVIVAL</span><strong>{stats.avgSurvival}</strong></div>
+          {matches.map((m, idx) => (
+            <div
+              key={idx}
+              style={{
+                background: "#1c1c1c",
+                padding: 15,
+                marginBottom: 10,
+                borderRadius: 8,
+              }}
+            >
+              <p>맵: {m.map}</p>
+              <p>날짜: {m.date}</p>
+              <p>순위: #{m.place}</p>
+              <p>킬: {m.kills} (헤드샷비율 {m.headshotRate})</p>
+              <p>어시스트: {m.assists}</p>
+              <p>데미지: {m.damage}</p>
+              <p>사용무기: {m.weapons}</p>
             </div>
+          ))}
 
-            <div style={styles.section}>
-              <h2 style={styles.st}>RECENT MATCH DETAILS</h2>
-
-              {recentMatches.map((m) => (
-                <div key={m.id} style={{ ...styles.mi }}>
-                  <div>
-                    <strong>
-                      {m.place === 1 ? "WINNER" : `#${m.place}`}
-                    </strong>
-                    <div style={{ fontSize: "0.8rem", color: "#777" }}>
-                      {m.map}
-                    </div>
-                    <div style={{ fontSize: "0.75rem", color: "#555" }}>
-                      {m.weapons.join(" / ")}
-                    </div>
-                  </div>
-
-                  <div style={{ textAlign: "right", fontSize: "0.8rem" }}>
-                    <div>{m.kills}K ({m.headshots} HS / {m.headshotRate})</div>
-                    <div>DMG {m.damage}</div>
-                    <div>AST {m.assists} / REV {m.revives}</div>
-                    <div>LONG {m.longestKill}m</div>
-                    <div>DIST {m.distance}km</div>
-                    <div style={{ fontSize: "0.7rem", color: "#444" }}>
-                      {m.date}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+          {allMatchIds.length > matches.length && (
+            <button
+              onClick={handleLoadMore}
+              style={{
+                width: "100%",
+                padding: 12,
+                background: "#ff4d00",
+                color: "white",
+                border: "none",
+                borderRadius: 6,
+              }}
+            >
+              더보기
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
-
-const styles: any = {
-  container: { minHeight: "100vh", background: "#050505", color: "#fff", padding: "50px 20px" },
-  content: { maxWidth: "900px", margin: "0 auto" },
-  title: { fontSize: "3rem", fontWeight: "900", textAlign: "center", marginBottom: "40px", letterSpacing: "5px" },
-  red: { color: "#ff4d4d" },
-  searchBox: { display: "flex", gap: "10px", background: "#111", padding: "10px", borderRadius: "12px", marginBottom: "40px" },
-  input: { flex: 1, background: "none", border: "none", color: "#fff", outline: "none", fontSize: "1.1rem" },
-  button: { background: "#ff4d4d", border: "none", color: "#fff", padding: "0 30px", borderRadius: "8px", fontWeight: "bold", cursor: "pointer" },
-  error: { color: "#ff4d4d", textAlign: "center", marginBottom: "20px" },
-  grid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "15px", marginBottom: "30px" },
-  card: { background: "#111", padding: "20px", borderRadius: "10px", textAlign: "center" },
-  section: { background: "#111", padding: "20px", borderRadius: "12px" },
-  st: { fontSize: "0.8rem", color: "#666", marginBottom: "20px" },
-  mi: { display: "flex", justifyContent: "space-between", padding: "15px", background: "#000", borderRadius: "8px", marginBottom: "10px" }
-};
